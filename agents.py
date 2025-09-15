@@ -1,6 +1,7 @@
 """
 LangGraph Agent Manager
 Manages agents and supervisor using separate agent files
+Enhanced with state management for reservation data and conversation history
 """
 
 import os
@@ -12,7 +13,7 @@ from supervisor_agent import SupervisorAgent
 from langgraph.graph import MessagesState
 from langchain_core.messages import HumanMessage
 import logging
-from IPython.display import Image, display
+from state_manager import state_manager, SupervisorState
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +86,7 @@ class AgentManager:
             return False
     
     async def process_message(self, tenant_id: str, message: str, whatsapp_number: str, conversation_id: str = None) -> Dict[str, Any]:
-        """Process a message using the supervisor and agents"""
+        """Process a message using the supervisor and agents with enhanced state"""
         try:
             if tenant_id not in self.supervisors:
                 await self.initialize_tenant_agents(tenant_id)
@@ -99,11 +100,22 @@ class AgentManager:
             
             supervisor = self.supervisors[tenant_id]
             
-            # Prepare input for supervisor - formato simples como no exemplo
-            input_data = {"messages": [HumanMessage(content=message)]}
+            # Load comprehensive state data
+            logger.info(f"Loading state data for tenant {tenant_id}, WhatsApp {whatsapp_number}")
+            state_data = await state_manager.load_state_data(tenant_id, whatsapp_number, conversation_id)
             
-            # Process with supervisor - o supervisor gerencia tudo automaticamente
-            result = supervisor.invoke(input_data)
+            # Create enhanced state for LangGraph
+            enhanced_state = state_manager.create_initial_state(tenant_id, whatsapp_number, message, state_data)
+            
+            # State is now automatically injected by LangGraph using InjectedState
+            
+            # Log state information
+            reservations_count = len(enhanced_state.get("reservations", []))
+            history_count = len(enhanced_state.get("conversation_history", []))
+            logger.info(f"State loaded: {reservations_count} reservations, {history_count} messages")
+            
+            # Process with supervisor using enhanced state
+            result = supervisor.invoke(enhanced_state)
             
             # Extract response from the MessagesState - formato simples
             messages = result.get("messages", [])
@@ -125,7 +137,7 @@ class AgentManager:
             else:
                 response_message = "Desculpe, não consegui processar sua mensagem."
             
-            # Log execution
+            # Log execution with enhanced metadata
             await db_service.log_agent_execution({
                 "tenant_id": tenant_id,
                 "conversation_id": whatsapp_number,
@@ -145,7 +157,11 @@ class AgentManager:
                 "metadata": {
                     "tenant_id": tenant_id,
                     "conversation_id": conversation_id or whatsapp_number,
-                    "timestamp": "now()"
+                    "whatsapp_number": whatsapp_number,
+                    "reservations_count": reservations_count,
+                    "history_count": history_count,
+                    "timestamp": "now()",
+                    "state_context": state_manager.format_state_for_agents(enhanced_state)[:200] + "..." if len(state_manager.format_state_for_agents(enhanced_state)) > 200 else state_manager.format_state_for_agents(enhanced_state)
                 }
             }
             

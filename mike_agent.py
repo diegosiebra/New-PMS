@@ -2,6 +2,7 @@
 Mike Agent - Document Collection Specialist
 Specialized in document validation and check-in processes for short-stays
 All configurations loaded from database
+Enhanced with state access for reservation and conversation context
 """
 
 import os
@@ -10,6 +11,7 @@ from typing import Dict, Any, List, Callable
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 import logging
+from state_manager import state_manager, SupervisorState
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +25,10 @@ class MikeAgent:
         self.configuration = agent_config.get("configuration", {})
         self.prompt = agent_config.get("prompt", self._get_default_prompt())
         self.tools_config = agent_config.get("tools", [])
-        self.model = ChatOpenAI(model=self.model_name, temperature=1)
+        
+        # Configure temperature from database or default
+        temperature = self.configuration.get("temperature", 0.3)
+        self.model = ChatOpenAI(model=self.model_name, temperature=temperature)
         self.agent = None
         self._create_agent()
     
@@ -38,7 +43,8 @@ class MikeAgent:
             model=self.model,
             tools=tools,
             prompt=self.prompt,
-            name="mike"
+            name="mike",
+            state_schema=SupervisorState
         )
         
         logger.info(f"Mike agent created for tenant {self.tenant_id} with {len(tools)} tools")
@@ -67,9 +73,9 @@ class MikeAgent:
         return tools
     
     def _create_validate_document_tool(self, tool_config: Dict[str, Any]) -> Callable:
-        """Create validate_document tool from configuration"""
+        """Create validate_document tool from configuration with state access"""
         
-        def validate_document(is_legible: bool, is_complete: bool, document_type: str, document_number: str) -> str:
+        def validate_document(is_legible: bool, is_complete: bool, document_type: str, document_number: str, state: Dict[str, Any] = None) -> str:
             """Validate if a document is legible and complete
             
             Args:
@@ -77,22 +83,32 @@ class MikeAgent:
                 is_complete: Whether the document is complete
                 document_type: Type of document (RG, CPF, CNH, Passaporte)
                 document_number: Document number
+                state: Current conversation state with reservation context
                 
             Returns:
                 Validation result message
             """
             logger.info(f"Mike: Validating {document_type} document - Legible: {is_legible}, Complete: {is_complete}")
             
+            # Get reservation context if available
+            context_info = ""
+            if state and state.get("reservations"):
+                reservations = state["reservations"]
+                if reservations:
+                    latest_reservation = reservations[0]
+                    if latest_reservation.get("reservation_id"):
+                        context_info = f" para a reserva {latest_reservation['reservation_id']}"
+            
             if not is_legible:
-                return f"❌ Documento {document_type} não está legível. Por favor, envie uma foto mais clara."
+                return f"❌ Documento {document_type} não está legível{context_info}. Por favor, envie uma foto mais clara."
             
             if not is_complete:
-                return f"❌ Documento {document_type} está incompleto. Por favor, envie o documento completo."
+                return f"❌ Documento {document_type} está incompleto{context_info}. Por favor, envie o documento completo."
             
             if document_type not in ["RG", "CPF", "CNH", "Passaporte"]:
                 return f"❌ Tipo de documento {document_type} não aceito. Tipos aceitos: RG, CPF, CNH, Passaporte."
             
-            return f"✅ Documento {document_type} validado com sucesso! Número: {document_number[:10]}..."
+            return f"✅ Documento {document_type} validado com sucesso{context_info}! Número: {document_number[:10]}..."
         
         return validate_document
     
@@ -165,14 +181,27 @@ class MikeAgent:
 - Comprovante de reserva
 - Documento do cartão usado na reserva
 
+🏠 CONTEXTO DISPONÍVEL:
+Você tem acesso a informações importantes do hóspede:
+- Dados da reserva (check-in, check-out, status)
+- Histórico da conversa
+- Informações do WhatsApp e tenant
+
+Use essas informações para:
+- Personalizar suas respostas
+- Referenciar detalhes específicos da reserva
+- Considerar o contexto da conversa anterior
+- Fornecer orientações mais precisas
+
 ⚠️ REGRAS IMPORTANTES:
 - Sempre seja prestativo e eficiente
 - Valide documentos antes de processar check-in
 - Forneça instruções claras e detalhadas
+- Use o contexto da reserva para personalizar respostas
 - Mantenha o foco na documentação e check-in
 - Seja paciente com hóspedes que têm dúvidas
 
-IMPORTANTE: Seja sempre prestativo e eficiente no processo de documentação. Foque apenas em questões relacionadas a documentos e check-in."""
+IMPORTANTE: Use sempre o contexto disponível para fornecer respostas personalizadas e relevantes. Referencie a reserva específica quando apropriado."""
     
     def get_agent(self):
         """Get the created agent"""

@@ -2,6 +2,7 @@
 Supervisor Agent - Multi-Agent Coordinator
 Uses langgraph-supervisor to coordinate between Mike and Lara agents
 All configurations loaded from database
+Enhanced with state management for reservation data and conversation history
 """
 
 import os
@@ -11,6 +12,7 @@ from langgraph_supervisor import create_supervisor
 import logging
 from langchain_core.tracers import ConsoleCallbackHandler
 from langchain_core.callbacks import CallbackManager
+from state_manager import SupervisorState, state_manager
 
 logger = logging.getLogger(__name__)
 
@@ -24,12 +26,15 @@ class SupervisorAgent:
         self.model_name = self.supervisor_config.get("model", os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
         self.configuration = self.supervisor_config.get("configuration", {})
         self.prompt = self.supervisor_config.get("prompt", self._get_default_prompt())
-        self.model = ChatOpenAI(model=self.model_name, temperature=1)
+        
+        # Configure temperature from database or default
+        temperature = self.configuration.get("temperature", 0.5)
+        self.model = ChatOpenAI(model=self.model_name, temperature=temperature)
         self.supervisor = None
         self._create_supervisor()
     
     def _create_supervisor(self):
-        """Create the supervisor agent using langgraph-supervisor"""
+        """Create the supervisor agent using langgraph-supervisor with enhanced state"""
         
         # Extract agent instances from our agent objects
         agent_instances = []
@@ -39,31 +44,40 @@ class SupervisorAgent:
             else:
                 agent_instances.append(agent)
         
-        # Create the supervisor using langgraph-supervisor - formato do exemplo
+        # Create the supervisor using langgraph-supervisor with enhanced state
         self.supervisor = create_supervisor(
             agents=agent_instances,
             model=self.model,
             prompt=self.prompt,
-            output_mode="full_history"
+            output_mode="full_history",
+            state_schema=SupervisorState  # Use our enhanced state
         ).compile()
         
         logger.info(f"Supervisor agent created for tenant {self.tenant_id} with {len(agent_instances)} agents")
     
     def _get_default_prompt(self) -> str:
         """Get default prompt when no configuration is available"""
-        return """You are a Supervisor coordinating two specialists:
+        return """You are a Supervisor coordinating two specialists for short-stay property management:
 
 - mike: handles document validation, check-in processes, and document-related questions.
 - lara: handles general support, property information, amenities, and general guest questions.
 
-Your goal is to satisfy the user's intent efficiently by automatically executing the appropriate agent.
+IMPORTANT: You have access to comprehensive context including:
+- Guest reservation details (check-in/out dates, status, listing info)
+- Conversation history (last 20 messages)
+- WhatsApp number and tenant information
+
+Use this context to provide personalized, relevant responses. Always consider:
+1. Current reservation status and dates
+2. Previous conversation context
+3. Guest's specific needs and situation
 
 Routing:
 - If the request is about documents, check-in, or validation, use mike.
 - If the request is about property info, amenities, general support, or recommendations, use lara.
-- If the request is a simple greeting or basic question, respond directly.
+- If the request is a simple greeting or basic question, respond directly using available context.
 
-Be decisive: when you have enough information, proceed with the appropriate agent without asking for confirmation. The agent will be executed automatically."""
+Be decisive: when you have enough information, proceed with the appropriate agent without asking for confirmation. The agent will be executed automatically and will have access to the same contextual information."""
     
     def get_supervisor(self):
         """Get the created supervisor"""
