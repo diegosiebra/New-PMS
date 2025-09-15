@@ -225,6 +225,106 @@ async def get_configurations(tenant_id: str):
         logger.error(f"Error getting configurations for tenant {tenant_id}: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
+@app.get("/api/message-buffers/status")
+async def get_message_buffer_status():
+    """Get status of message buffers for monitoring fragmented messages"""
+    try:
+        status = await webhook_service.get_message_buffer_status()
+        return {
+            "success": True,
+            "data": status
+        }
+    except Exception as e:
+        logger.error(f"Error getting message buffer status: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@app.post("/api/message-buffers/{tenant_id}/force-complete")
+async def force_complete_fragmented_message(
+    tenant_id: str,
+    whatsapp_number: str,
+    conversation_id: str
+):
+    """Force complete a fragmented message (useful for debugging or manual intervention)"""
+    try:
+        result = await webhook_service.force_complete_fragmented_message(
+            tenant_id, whatsapp_number, conversation_id
+        )
+        return result
+    except Exception as e:
+        logger.error(f"Error forcing message completion: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@app.post("/api/evolution/{tenant_id}/send-media")
+async def send_media_message(
+    tenant_id: str,
+    whatsapp_number: str,
+    media_url: str,
+    media_type: str = "image",
+    caption: str = ""
+):
+    """Send media message via Evolution API"""
+    try:
+        result = await webhook_service.send_media_message(
+            tenant_id, whatsapp_number, media_url, media_type, caption
+        )
+        return result
+    except Exception as e:
+        logger.error(f"Error sending media message: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@app.post("/api/evolution/{tenant_id}/send-template")
+async def send_template_message(
+    tenant_id: str,
+    whatsapp_number: str,
+    template_name: str,
+    parameters: list = None
+):
+    """Send template message via Evolution API"""
+    try:
+        result = await webhook_service.send_template_message(
+            tenant_id, whatsapp_number, template_name, parameters
+        )
+        return result
+    except Exception as e:
+        logger.error(f"Error sending template message: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@app.get("/api/evolution/{tenant_id}/instance-status")
+async def get_instance_status(tenant_id: str):
+    """Get Evolution API instance status"""
+    try:
+        result = await webhook_service.get_instance_status(tenant_id)
+        return result
+    except Exception as e:
+        logger.error(f"Error getting instance status: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@app.post("/api/evolution/{tenant_id}/mark-read")
+async def mark_message_as_read(
+    tenant_id: str,
+    whatsapp_number: str,
+    message_id: str
+):
+    """Mark message as read via Evolution API"""
+    try:
+        result = await webhook_service.mark_message_as_read(
+            tenant_id, whatsapp_number, message_id
+        )
+        return result
+    except Exception as e:
+        logger.error(f"Error marking message as read: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@app.get("/api/evolution/{tenant_id}/profile-picture")
+async def get_profile_picture(tenant_id: str, whatsapp_number: str):
+    """Get profile picture via Evolution API"""
+    try:
+        result = await webhook_service.get_profile_picture(tenant_id, whatsapp_number)
+        return result
+    except Exception as e:
+        logger.error(f"Error getting profile picture: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
 if __name__ == "__main__":
     import uvicorn
     

@@ -137,12 +137,40 @@ class AgentManager:
             else:
                 response_message = "Desculpe, não consegui processar sua mensagem."
             
-            # Log execution with enhanced metadata
+            # Log user message
+            await db_service.log_agent_execution({
+                "tenant_id": tenant_id,
+                "conversation_id": whatsapp_number,
+                "agent_type": "user_message",
+                "agent_name": "User",
+                "input": {"message": message},
+                "output": None,
+                "status": "success",
+                "execution_time": None,
+                "error_message": None,
+                "created_at": "now()"
+            })
+            
+            # Log supervisor execution
             await db_service.log_agent_execution({
                 "tenant_id": tenant_id,
                 "conversation_id": whatsapp_number,
                 "agent_type": "supervisor",
                 "agent_name": "Supervisor",
+                "input": {"message": message},
+                "output": {"response": response_message},
+                "status": "success",
+                "execution_time": None,
+                "error_message": None,
+                "created_at": "now()"
+            })
+            
+            # Log bot response
+            await db_service.log_agent_execution({
+                "tenant_id": tenant_id,
+                "conversation_id": whatsapp_number,
+                "agent_type": "bot_response",
+                "agent_name": "Bot",
                 "input": {"message": message},
                 "output": {"response": response_message},
                 "status": "success",

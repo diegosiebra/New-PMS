@@ -95,3 +95,24 @@ class TenantContext(BaseModel):
     name: str
     settings: Optional[Dict[str, Any]] = None
     evolution_api_config: Optional[Dict[str, str]] = None
+
+class FragmentedMessage(BaseModel):
+    """Represents a fragmented message being assembled"""
+    message_id: str
+    tenant_id: str
+    whatsapp_number: str
+    conversation_id: str
+    fragments: List[str] = []
+    total_fragments: Optional[int] = None
+    current_fragment: int = 0
+    timestamp: datetime
+    timeout_seconds: int = 30  # Timeout para mensagens incompletas
+    is_complete: bool = False
+    assembled_content: Optional[str] = None
+
+class MessageFragment(BaseModel):
+    """Individual message fragment"""
+    fragment_number: int
+    content: str
+    is_last: bool = False
+    timestamp: datetime
