@@ -13,6 +13,7 @@ import logging
 from langchain_core.tracers import ConsoleCallbackHandler
 from langchain_core.callbacks import CallbackManager
 from state_manager import SupervisorState, state_manager
+from langgraph.checkpoint.memory import InMemorySaver
 
 logger = logging.getLogger(__name__)
 
@@ -23,9 +24,11 @@ class SupervisorAgent:
         self.tenant_id = tenant_id
         self.agents = agents
         self.supervisor_config = supervisor_config or {}
-        self.model_name = self.supervisor_config.get("model", os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
+        self.model_name = self.supervisor_config.get("model", os.getenv("OPENAI_MODEL", "gpt-5-mini"))
         self.configuration = self.supervisor_config.get("configuration", {})
-        self.prompt = self.supervisor_config.get("prompt", self._get_default_prompt())
+        self.prompt = self.supervisor_config.get("prompt")
+        if not self.prompt:
+            raise ValueError("Supervisor agent prompt is required and must be configured in database")
         
         # Configure temperature from database or default
         temperature = self.configuration.get("temperature", 0.5)
@@ -45,45 +48,22 @@ class SupervisorAgent:
                 agent_instances.append(agent)
         
         # Create the supervisor using langgraph-supervisor with enhanced state
+        self.checkpointer = InMemorySaver()
         self.supervisor = create_supervisor(
             agents=agent_instances,
             model=self.model,
             prompt=self.prompt,
             output_mode="full_history",
             state_schema=SupervisorState  # Use our enhanced state
-        ).compile()
+        ).compile(checkpointer=self.checkpointer)
         
         logger.info(f"Supervisor agent created for tenant {self.tenant_id} with {len(agent_instances)} agents")
-    
-    def _get_default_prompt(self) -> str:
-        """Get default prompt when no configuration is available"""
-        return """You are a Supervisor coordinating two specialists for short-stay property management:
-
-- mike: handles document validation, check-in processes, and document-related questions.
-- lara: handles general support, property information, amenities, and general guest questions.
-
-IMPORTANT: You have access to comprehensive context including:
-- Guest reservation details (check-in/out dates, status, listing info)
-- Conversation history (last 20 messages)
-- WhatsApp number and tenant information
-
-Use this context to provide personalized, relevant responses. Always consider:
-1. Current reservation status and dates
-2. Previous conversation context
-3. Guest's specific needs and situation
-
-Routing:
-- If the request is about documents, check-in, or validation, use mike.
-- If the request is about property info, amenities, general support, or recommendations, use lara.
-- If the request is a simple greeting or basic question, respond directly using available context.
-
-Be decisive: when you have enough information, proceed with the appropriate agent without asking for confirmation. The agent will be executed automatically and will have access to the same contextual information."""
     
     def get_supervisor(self):
         """Get the created supervisor"""
         return self.supervisor
     
-    def invoke(self, input_data):
+    def invoke(self, input_data, thread_id: str):
         """Invoke the supervisor and return the result"""
         try:
             # Configurar callbacks para tracing automático
@@ -96,8 +76,14 @@ Be decisive: when you have enough information, proceed with the appropriate agen
             # Configurar callback manager
             callback_manager = CallbackManager(callbacks) if callbacks else None
             
-            # Use the supervisor to process the input with tracing
-            config = {"callbacks": callback_manager} if callback_manager else {}
+            # Configure thread_id for tenant+whatsapp segregation (required for checkpointer)
+            config = {
+                "callbacks": callback_manager,
+                "configurable": {"thread_id": thread_id}
+            } if callback_manager else {
+                "configurable": {"thread_id": thread_id}
+            }
+            
             result = self.supervisor.invoke(input_data, config=config)
             
             # Log resumo da execução

@@ -41,7 +41,8 @@ async def test_supervisor_debug():
         
         # Testar com uma mensagem simples
         input_data = {"messages": [HumanMessage(content=message)]}
-        result = supervisor.invoke(input_data)
+        thread_id = f"{tenant_id}:test_user"
+        result = supervisor.invoke(input_data, thread_id=thread_id)
         
         print(f"Resultado do supervisor: {result}")
         

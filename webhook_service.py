@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from database import db_service
 from agents import agent_manager
 from message_buffer_service import message_buffer_service
@@ -14,7 +14,7 @@ class WebhookService:
     async def process_evolution_webhook(self, tenant_id: str, webhook_data: Dict[str, Any]) -> Dict[str, Any]:
         """Process EvolutionAPI webhook"""
         try:
-            event = webhook_data.get("event")
+            event = str(webhook_data.get("event")).upper()
             instance = webhook_data.get("instance")
             data = webhook_data.get("data", {})
             
@@ -27,9 +27,9 @@ class WebhookService:
                 return {"success": False, "message": "Tenant não encontrado"}
             
             # Process different event types
-            if event == "CONNECTION_UPDATE":
+            if event == "CONNECTION.UPDATE":
                 await self.handle_connection_update(tenant_id, data)
-            elif event == "MESSAGES_UPSERT":
+            elif event == "MESSAGES.UPSERT":
                 await self.handle_message_received(tenant_id, data)
             else:
                 logger.info(f"Unhandled EvolutionAPI event: {event}")
@@ -97,14 +97,14 @@ class WebhookService:
             complete_message = await message_buffer_service.process_message(
                 tenant_id=tenant_id,
                 whatsapp_number=whatsapp_number,
-                conversation_id=message_id,
+                conversation_id=whatsapp_number,  # Use whatsapp_number as conversation_id for consistent memory
                 message_content=message_content,
                 message_id=message_id
             )
             
-            # If message is still being buffered (fragmented), don't process yet
+            # If message is still being buffered (fragmented or sequential), don't process yet
             if complete_message is None:
-                logger.info(f"Message buffered as fragment for tenant {tenant_id}, waiting for completion...")
+                logger.info(f"Message buffered for tenant {tenant_id}, waiting for completion...")
                 return
             
             logger.info(f"Complete message ready for processing: {complete_message}")
@@ -115,7 +115,7 @@ class WebhookService:
                 tenant_id=tenant_id,
                 message=complete_message,
                 whatsapp_number=whatsapp_number,
-                conversation_id=message_id
+                conversation_id=whatsapp_number  # Use whatsapp_number as conversation_id for consistent memory
             )
             
             logger.info(f"Agent response: {response}")
@@ -169,6 +169,45 @@ class WebhookService:
         except Exception as e:
             logger.error(f"Error getting buffer status: {e}")
             return {"error": str(e)}
+    
+    async def check_and_process_completed_buffers(self, tenant_id: str, whatsapp_number: str) -> Optional[str]:
+        """Check if there are any completed sequence buffers and return the complete message"""
+        try:
+            # Check if we have a completed sequence buffer
+            sequence_key = f"{tenant_id}:{whatsapp_number}:sequence"
+            
+            if sequence_key in message_buffer_service.active_buffers:
+                buffer = message_buffer_service.active_buffers[sequence_key]
+                if buffer.is_complete:
+                    complete_message = buffer.assembled_content
+                    del message_buffer_service.active_buffers[sequence_key]
+                    
+                    logger.info(f"Processing completed sequence buffer for {sequence_key}")
+                    
+                    # Process the complete message with agent manager
+                    response = await self.agent_manager.process_message(
+                        tenant_id=tenant_id,
+                        message=complete_message,
+                        whatsapp_number=whatsapp_number,
+                        conversation_id=whatsapp_number  # Use whatsapp_number as conversation_id for consistent memory
+                    )
+                    
+                    logger.info(f"Agent response for completed buffer: {response}")
+                    
+                    # Send response back via EvolutionAPI
+                    if response.get("success"):
+                        await self.send_response(tenant_id, whatsapp_number, response["message"])
+                    
+                    # Log the conversation
+                    await self.log_conversation(tenant_id, whatsapp_number, complete_message, response.get("message", ""), False)
+                    
+                    return complete_message
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error checking completed buffers: {e}")
+            return None
     
     async def force_complete_fragmented_message(self, tenant_id: str, whatsapp_number: str, conversation_id: str) -> Dict[str, Any]:
         """Force complete a fragmented message (useful for debugging or manual intervention)"""

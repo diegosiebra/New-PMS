@@ -124,7 +124,17 @@ class StateManager:
     def _extract_message_content(msg_data: Dict[str, Any]) -> str:
         """Extract message content from agent execution data"""
         try:
-            # Try to get message from input or output
+            # For user messages, get from input
+            if msg_data.get("agent_type") == "user_message":
+                if msg_data.get("input") and isinstance(msg_data["input"], dict):
+                    return msg_data["input"].get("message", "")
+            
+            # For bot responses, get from output
+            elif msg_data.get("agent_type") in ["bot_response", "supervisor"]:
+                if msg_data.get("output") and isinstance(msg_data["output"], dict):
+                    return msg_data["output"].get("response", "") or msg_data["output"].get("message", "")
+            
+            # Fallback: try both input and output
             if msg_data.get("input") and isinstance(msg_data["input"], dict):
                 if "message" in msg_data["input"]:
                     return msg_data["input"]["message"]
@@ -135,7 +145,7 @@ class StateManager:
                 elif "message" in msg_data["output"]:
                     return msg_data["output"]["message"]
             
-            # Fallback to agent_name or empty string
+            # Last fallback
             return msg_data.get("agent_name", "")
             
         except Exception as e:
@@ -155,7 +165,8 @@ class StateManager:
             reservations=state_data.get("reservations", []),
             conversation_history=state_data.get("conversation_history", []),
             current_agent=None,
-            metadata=state_data.get("metadata", {})
+            metadata=state_data.get("metadata", {}),
+            remaining_steps=3  # Limit steps to prevent recursion loops
         )
     
     @staticmethod
@@ -196,12 +207,12 @@ class StateManager:
             
             # Add recent conversation context
             if state.get("conversation_history"):
-                recent_messages = state["conversation_history"][-5:]  # Last 5 messages
+                recent_messages = state["conversation_history"][-10:]  # Last 10 messages for better context
                 state_info.append(f"\n💬 **Contexto da Conversa (últimas {len(recent_messages)} mensagens):**")
                 for msg in recent_messages:
                     sender = "🤖 Bot" if msg.get("from_me") else "👤 Cliente"
-                    content = msg.get("content", "")[:100]  # Truncate long messages
-                    if len(msg.get("content", "")) > 100:
+                    content = msg.get("content", "")[:150]  # Increase truncation limit
+                    if len(msg.get("content", "")) > 150:
                         content += "..."
                     state_info.append(f"  {sender}: {content}")
             

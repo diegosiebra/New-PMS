@@ -72,7 +72,7 @@ class AgentManager:
             if agent_instances:
                 # Create supervisor with configuration from database
                 supervisor_instance = self.create_supervisor_agent(tenant_id, agent_instances, supervisor_config)
-                self.supervisors[tenant_id] = supervisor_instance.get_supervisor()
+                self.supervisors[tenant_id] = supervisor_instance
                 self.agent_instances[tenant_id] = agent_instances
 
                 logger.info(f"Initialized {len(agent_instances)} agents for tenant {tenant_id}")
@@ -114,19 +114,32 @@ class AgentManager:
             history_count = len(enhanced_state.get("conversation_history", []))
             logger.info(f"State loaded: {reservations_count} reservations, {history_count} messages")
             
-            # Process with supervisor using enhanced state
-            result = supervisor.invoke(enhanced_state)
+            # Process with supervisor using enhanced state with thread_id for memory
+            thread_id = f"{tenant_id}:{whatsapp_number}"
+            result = supervisor.invoke(enhanced_state, thread_id=thread_id)
             
             # Extract response from the MessagesState - formato simples
             messages = result.get("messages", [])
             
-            # Pegar a última AIMessage do supervisor (que já inclui a resposta do agente executado)
+            # Pegar a mensagem do agente (não do supervisor)
             from langchain_core.messages import AIMessage
             ai_messages = [msg for msg in messages if isinstance(msg, AIMessage)]
             
             if ai_messages:
-                # A última mensagem já contém a resposta completa do agente executado
-                response_message = ai_messages[-1].content
+                # Encontrar a mensagem do agente (não a última que pode ser do supervisor)
+                response_message = ""
+                for msg in reversed(ai_messages):  # Começar da última para trás
+                    if msg.content and msg.content.strip() and not msg.content.startswith("Transferring"):
+                        response_message = msg.content
+                        break
+                
+                # Se não encontrou mensagem válida, usar a última não vazia
+                if not response_message and ai_messages:
+                    for msg in reversed(ai_messages):
+                        if msg.content and msg.content.strip():
+                            response_message = msg.content
+                            break
+                
                 logger.info(f"Supervisor completed execution with response length: {len(response_message)}")
                 
                 # Log detalhado para debug

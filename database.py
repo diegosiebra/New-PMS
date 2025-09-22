@@ -30,6 +30,29 @@ class DatabaseService:
             logger.error(f"Error getting tenant {tenant_id}: {e}")
             return None
     
+    async def get_tenant_by_instance(self, instance_name: str) -> Optional[Dict[str, Any]]:
+        """Get tenant information by Evolution API instance name"""
+        try:
+            # Search for tenant where settings.evolution.instanceName matches the instance
+            response = self.supabase.table("tenantnew").select("*").execute()
+            
+            if response.data:
+                for tenant in response.data:
+                    settings = tenant.get("settings", {})
+                    evolution_config = settings.get("evolution", {})
+                    tenant_instance = evolution_config.get("instanceName")
+                    
+                    if tenant_instance == instance_name:
+                        logger.info(f"Found tenant {tenant['id']} for instance {instance_name}")
+                        return tenant
+            
+            logger.warning(f"No tenant found for instance {instance_name}")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error getting tenant by instance {instance_name}: {e}")
+            return None
+    
     async def get_agent_configurations(self, tenant_id: str) -> List[Dict[str, Any]]:
         """Get agent configurations for a tenant"""
         try:

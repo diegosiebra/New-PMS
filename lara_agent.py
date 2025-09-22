@@ -7,6 +7,7 @@ Enhanced with state access for reservation and conversation context
 
 import os
 import json
+import asyncio
 from typing import Dict, Any, List, Callable, Annotated
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent, InjectedState
@@ -33,7 +34,7 @@ class LaraAgent:
         self.tools_config = agent_config.get("tools", [])
         
         # Configure temperature from database or default
-        temperature = self.configuration.get("temperature", 0.7)
+        temperature = self.configuration.get("temperature", 0.3)
         self.model = ChatOpenAI(model=self.model_name, temperature=temperature)
         self.agent = None
         self._create_agent()
@@ -145,7 +146,6 @@ class LaraAgent:
                         reservation = reservations[0]  # Use latest reservation
                 
                 # Search documents using RAG
-                import asyncio
                 documents = asyncio.run(rag_service.search_documents(query, reservation, limit))
                 
                 if documents:
@@ -216,7 +216,6 @@ class LaraAgent:
                         try:
                             from database import db_service
                             scope_tags = self._extract_scope_tags(target_reservation)
-                            import asyncio
                             services_docs = asyncio.run(db_service.search_documents_rag("serviços inclusos", scope_tags, 3))
                             
                             if services_docs:

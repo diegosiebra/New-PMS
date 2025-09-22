@@ -90,17 +90,34 @@ async def evolution_webhook_singular(
     x_tenant_id: Optional[str] = Header(None, alias="X-Tenant-ID")
 ):
     """EvolutionAPI webhook endpoint (singular, without tenant ID in URL)"""
-    if not x_tenant_id:
-        raise HTTPException(
-            status_code=400, 
-            detail="Tenant ID is required in X-Tenant-ID header"
-        )
-    
     try:
-        result = await webhook_service.process_evolution_webhook(x_tenant_id, payload.dict())
+        # Extract instance from payload
+        instance_name = payload.instance
+        if not instance_name:
+            raise HTTPException(
+                status_code=400, 
+                detail="Instance name is required in payload"
+            )
+        
+        # Look up tenant_id by instance name
+        tenant_data = await db_service.get_tenant_by_instance(instance_name)
+        if not tenant_data:
+            raise HTTPException(
+                status_code=404, 
+                detail=f"No tenant found for instance: {instance_name}"
+            )
+        
+        tenant_id = tenant_data['id']
+        logger.info(f"Resolved tenant_id {tenant_id} for instance {instance_name}")
+        
+        # Process webhook with resolved tenant_id
+        result = await webhook_service.process_evolution_webhook(tenant_id, payload.dict())
         return result
+        
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error processing webhook for tenant {x_tenant_id}: {e}")
+        logger.error(f"Error processing webhook for instance {payload.instance}: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 @app.get("/api/agents/{tenant_id}")
@@ -252,6 +269,31 @@ async def force_complete_fragmented_message(
         return result
     except Exception as e:
         logger.error(f"Error forcing message completion: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@app.post("/api/message-buffers/{tenant_id}/check-completed")
+async def check_completed_buffers(
+    tenant_id: str,
+    whatsapp_number: str
+):
+    """Check and process any completed sequence buffers"""
+    try:
+        result = await webhook_service.check_and_process_completed_buffers(
+            tenant_id, whatsapp_number
+        )
+        if result:
+            return {
+                "success": True,
+                "message": "Completed buffer processed",
+                "complete_message": result
+            }
+        else:
+            return {
+                "success": False,
+                "message": "No completed buffers found"
+            }
+    except Exception as e:
+        logger.error(f"Error checking completed buffers: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 @app.post("/api/evolution/{tenant_id}/send-media")
