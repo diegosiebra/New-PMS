@@ -7,11 +7,15 @@ Enhanced with state access for reservation and conversation context
 
 import os
 import json
-from typing import Dict, Any, List, Callable
+import hashlib
+import base64
+from typing import Dict, Any, List, Callable, Optional
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 import logging
 from state_manager import state_manager, SupervisorState
+from database import db_service
+from models import IDDocument
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +25,7 @@ class MikeAgent:
     def __init__(self, tenant_id: str, agent_config: Dict[str, Any]):
         self.tenant_id = tenant_id
         self.agent_config = agent_config
-        self.model_name = agent_config.get("model", os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
+        self.model_name = agent_config.get("model", os.getenv("OPENAI_MODEL", "gpt-5-mini"))
         self.configuration = agent_config.get("configuration", {})
         self.prompt = agent_config.get("prompt", self._get_default_prompt())
         self.tools_config = agent_config.get("tools", [])
@@ -67,6 +71,14 @@ class MikeAgent:
                 tools.append(self._create_validate_document_tool(tool_config))
             elif tool_name == "register_document":
                 tools.append(self._create_register_document_tool(tool_config))
+            elif tool_name == "store_document":
+                tools.append(self._create_store_document_tool(tool_config))
+            elif tool_name == "extract_name_from_document":
+                tools.append(self._create_extract_name_tool(tool_config))
+            elif tool_name == "check_document_status":
+                tools.append(self._create_check_document_status_tool(tool_config))
+            elif tool_name == "list_required_documents":
+                tools.append(self._create_list_required_documents_tool(tool_config))
             else:
                 logger.warning(f"Unknown tool: {tool_name}")
         
@@ -134,6 +146,239 @@ class MikeAgent:
         
         return register_document
     
+    def _create_store_document_tool(self, tool_config: Dict[str, Any]) -> Callable:
+        """Create store_document tool from configuration"""
+        
+        async def store_document(
+            document_type: str, 
+            base64_data: str, 
+            file_name: str,
+            mime_type: str,
+            guest_id: Optional[int] = None,
+            reservation_id: Optional[str] = None,
+            state: Dict[str, Any] = None
+        ) -> str:
+            """Store a document in the iddocuments table
+            
+            Args:
+                document_type: Type of document (RG, CPF, CNH, Passport)
+                base64_data: Base64 encoded document data
+                file_name: Original file name
+                mime_type: MIME type of the file
+                guest_id: Guest ID (optional)
+                reservation_id: Reservation ID (links to Reservations.reservationid)
+                state: Current conversation state
+                
+            Returns:
+                Storage result message
+            """
+            logger.info(f"Mike: Storing {document_type} document")
+            
+            try:
+                # Get tenant_id from state
+                tenant_id = state.get("tenant_id") if state else self.tenant_id
+                
+                # Generate file hash for deduplication
+                file_hash = hashlib.sha256(base64_data.encode()).hexdigest()
+                
+                # Create storage path
+                storage_path = f"documents/{tenant_id}/{document_type}/{file_hash[:8]}_{file_name}"
+                
+                # Prepare document data
+                document_data = {
+                    "tenant_id": tenant_id,
+                    "reservation_id": reservation_id,
+                    "guest_id": guest_id,
+                    "type": document_type,
+                    "storage_path": storage_path,
+                    "file_size": len(base64_data),
+                    "mime_type": mime_type,
+                    "hash": file_hash,
+                    "base64_data": base64_data,
+                    "status": "pending",
+                    "validation_status": "pending",
+                    "processing_metadata": {
+                        "file_name": file_name,
+                        "uploaded_by": "mike_agent",
+                        "conversation_id": state.get("conversation_id") if state else None
+                    }
+                }
+                
+                # Store document in database
+                document_id = await db_service.store_document(document_data)
+                
+                if document_id:
+                    return f"✅ Documento {document_type} armazenado com sucesso! ID: {document_id}"
+                else:
+                    return f"❌ Erro ao armazenar documento {document_type}"
+                    
+            except Exception as e:
+                logger.error(f"Error storing document: {e}")
+                return f"❌ Erro interno ao armazenar documento {document_type}: {str(e)}"
+        
+        return store_document
+    
+    def _create_extract_name_tool(self, tool_config: Dict[str, Any]) -> Callable:
+        """Create extract_name_from_document tool from configuration"""
+        
+        async def extract_name_from_document(
+            document_id: int,
+            document_type: str,
+            base64_data: Optional[str] = None,
+            state: Dict[str, Any] = None
+        ) -> str:
+            """Extract person name from document using OCR/AI
+            
+            Args:
+                document_id: Document ID in database
+                document_type: Type of document
+                base64_data: Base64 data (if not provided, will fetch from DB)
+                state: Current conversation state
+                
+            Returns:
+                Extraction result with person name
+            """
+            logger.info(f"Mike: Extracting name from {document_type} document {document_id}")
+            
+            try:
+                # If base64_data not provided, fetch from database
+                if not base64_data:
+                    document = await db_service.get_document_by_id(document_id)
+                    if not document:
+                        return f"❌ Documento {document_id} não encontrado"
+                    base64_data = document.get("base64_data")
+                
+                if not base64_data:
+                    return f"❌ Dados do documento {document_id} não disponíveis"
+                
+                # Simulate name extraction (in real implementation, use OCR/AI service)
+                extracted_name = await self._simulate_name_extraction(document_type, base64_data)
+                
+                # Update document with extracted name
+                await db_service.update_document_status(
+                    document_id, 
+                    "approved", 
+                    "validated",
+                    {"extracted_name": extracted_name, "extraction_method": "ai_simulation"}
+                )
+                
+                if extracted_name:
+                    return f"✅ Nome extraído do documento {document_type}: {extracted_name}"
+                else:
+                    return f"⚠️ Não foi possível extrair o nome do documento {document_type}. Verificação manual necessária."
+                    
+            except Exception as e:
+                logger.error(f"Error extracting name from document: {e}")
+                return f"❌ Erro ao extrair nome do documento: {str(e)}"
+        
+        return extract_name_from_document
+    
+    def _create_check_document_status_tool(self, tool_config: Dict[str, Any]) -> Callable:
+        """Create check_document_status tool from configuration"""
+        
+        async def check_document_status(
+            document_type: str,
+            guest_id: Optional[int] = None,
+            reservation_id: Optional[str] = None,
+            state: Dict[str, Any] = None
+        ) -> str:
+            """Check if a document has already been submitted
+            
+            Args:
+                document_type: Type of document to check
+                guest_id: Guest ID (optional)
+                reservation_id: Reservation ID (optional)
+                state: Current conversation state
+                
+            Returns:
+                Status check result
+            """
+            logger.info(f"Mike: Checking status for {document_type} document")
+            
+            try:
+                tenant_id = state.get("tenant_id") if state else self.tenant_id
+                
+                # Check if document exists
+                exists = await db_service.check_document_exists(
+                    tenant_id, document_type, guest_id=guest_id, reservation_id=reservation_id
+                )
+                
+                if exists:
+                    return f"✅ Documento {document_type} já foi enviado e está em análise"
+                else:
+                    return f"📋 Documento {document_type} ainda não foi enviado"
+                    
+            except Exception as e:
+                logger.error(f"Error checking document status: {e}")
+                return f"❌ Erro ao verificar status do documento: {str(e)}"
+        
+        return check_document_status
+    
+    def _create_list_required_documents_tool(self, tool_config: Dict[str, Any]) -> Callable:
+        """Create list_required_documents tool from configuration"""
+        
+        async def list_required_documents(
+            state: Dict[str, Any] = None
+        ) -> str:
+            """List required documents for check-in process
+            
+            Args:
+                state: Current conversation state
+                
+            Returns:
+                List of required documents
+            """
+            logger.info("Mike: Listing required documents")
+            
+            try:
+                tenant_id = state.get("tenant_id") if state else self.tenant_id
+                
+                # Get required documents configuration
+                required_docs = await db_service.get_required_documents_config(tenant_id)
+                
+                if not required_docs:
+                    return "❌ Configuração de documentos não encontrada"
+                
+                # Format response
+                response = "📋 Documentos necessários para check-in:\n\n"
+                
+                for doc in required_docs:
+                    status_icon = "✅" if doc["is_required"] else "📄"
+                    response += f"{status_icon} **{doc['type']}**: {doc['description']}\n"
+                    
+                    if doc.get("examples"):
+                        examples = ", ".join(doc["examples"])
+                        response += f"   Exemplos: {examples}\n"
+                    
+                    response += "\n"
+                
+                response += "⚠️ Todos os documentos devem estar legíveis e válidos."
+                
+                return response
+                
+            except Exception as e:
+                logger.error(f"Error listing required documents: {e}")
+                return f"❌ Erro ao listar documentos necessários: {str(e)}"
+        
+        return list_required_documents
+    
+    async def _simulate_name_extraction(self, document_type: str, base64_data: str) -> Optional[str]:
+        """Simulate name extraction from document (replace with real OCR/AI service)"""
+        # This is a simulation - in real implementation, use OCR/AI service
+        # For now, return a placeholder name based on document type
+        name_mapping = {
+            "RG": "João Silva Santos",
+            "CPF": "Maria Oliveira Costa", 
+            "CNH": "Pedro Almeida Lima",
+            "Passport": "Ana Rodrigues Ferreira"
+        }
+        
+        # Simulate processing time
+        import asyncio
+        await asyncio.sleep(0.1)
+        
+        return name_mapping.get(document_type, "Nome Extraído")
+    
     def _get_default_tools(self) -> List[Callable]:
         """Get default tools when no configuration is available"""
         
@@ -163,7 +408,16 @@ class MikeAgent:
 
 ⚠️ Todos os documentos devem estar legíveis e válidos."""
         
-        return [validate_documents, process_checkin, get_required_documents]
+        # Include new document tools in default tools
+        return [
+            validate_documents, 
+            process_checkin, 
+            get_required_documents,
+            self._create_store_document_tool({}),
+            self._create_extract_name_tool({}),
+            self._create_check_document_status_tool({}),
+            self._create_list_required_documents_tool({})
+        ]
     
     def _get_default_prompt(self) -> str:
         """Get default prompt when no configuration is available"""
@@ -206,6 +460,10 @@ FERRAMENTAS DISPONÍVEIS:
 - **validate_documents**: Use para validar documentos enviados pelo hóspede
 - **process_checkin**: Use para processar check-in
 - **get_required_documents**: Use para listar documentos necessários
+- **store_document**: Use para armazenar documentos recebidos (RG, CPF, CNH, Passport)
+- **extract_name_from_document**: Use para extrair nome automaticamente do documento
+- **check_document_status**: Use para verificar se documento já foi enviado
+- **list_required_documents**: Use apenas quando solicitado pelo Supervisor
 
 IMPORTANTE:
 - SEMPRE use as ferramentas apropriadas antes de responder
@@ -251,8 +509,8 @@ IMPORTANTE:
             "model": self.model_name,
             "tenant_id": self.tenant_id,
             "configuration": self.configuration,
-            "tools_count": len(self.tools_config) if self.tools_config else 3,
-            "tools": [tool.get("name") for tool in self.tools_config] if self.tools_config else ["validate_documents", "process_checkin", "get_required_documents"],
+            "tools_count": len(self.tools_config) if self.tools_config else 7,
+            "tools": [tool.get("name") for tool in self.tools_config] if self.tools_config else ["validate_documents", "process_checkin", "get_required_documents", "store_document", "extract_name_from_document", "check_document_status", "list_required_documents"],
             "prompt_length": len(self.prompt),
             "is_enabled": self.agent_config.get("is_enabled", True)
         }

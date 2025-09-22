@@ -357,6 +357,118 @@ class DatabaseService:
         except Exception as e:
             logger.error(f"Error saving conversation message: {e}")
             return False
+    
+    # Document management methods for iddocuments table
+    async def store_document(self, document_data: Dict[str, Any]) -> Optional[int]:
+        """Store a document in the iddocuments table"""
+        try:
+            response = self.supabase.table("iddocuments").insert(document_data).execute()
+            if response.data:
+                document_id = response.data[0]["id"]
+                logger.info(f"Document stored with ID: {document_id}")
+                return document_id
+            return None
+        except Exception as e:
+            logger.error(f"Error storing document: {e}")
+            return None
+    
+    async def get_documents_by_guest(self, tenant_id: str, guest_id: int) -> List[Dict[str, Any]]:
+        """Get all documents for a specific guest"""
+        try:
+            response = self.supabase.table("iddocuments").select("*").eq("tenant_id", tenant_id).eq("guest_id", guest_id).execute()
+            return response.data or []
+        except Exception as e:
+            logger.error(f"Error getting documents for guest {guest_id}: {e}")
+            return []
+    
+    async def get_documents_by_reservation(self, tenant_id: str, reservation_id: str) -> List[Dict[str, Any]]:
+        """Get all documents for a specific reservation"""
+        try:
+            response = self.supabase.table("iddocuments").select("*").eq("tenant_id", tenant_id).eq("reservation_id", reservation_id).execute()
+            return response.data or []
+        except Exception as e:
+            logger.error(f"Error getting documents for reservation {reservation_id}: {e}")
+            return []
+    
+    async def get_document_by_id(self, document_id: int) -> Optional[Dict[str, Any]]:
+        """Get a specific document by ID"""
+        try:
+            response = self.supabase.table("iddocuments").select("*").eq("id", document_id).execute()
+            if response.data:
+                return response.data[0]
+            return None
+        except Exception as e:
+            logger.error(f"Error getting document {document_id}: {e}")
+            return None
+    
+    async def update_document_status(self, document_id: int, status: str, validation_status: str = None, processing_metadata: Dict[str, Any] = None) -> bool:
+        """Update document status and validation status"""
+        try:
+            update_data = {"status": status}
+            if validation_status:
+                update_data["validation_status"] = validation_status
+            if processing_metadata:
+                update_data["processing_metadata"] = processing_metadata
+            
+            response = self.supabase.table("iddocuments").update(update_data).eq("id", document_id).execute()
+            return bool(response.data)
+        except Exception as e:
+            logger.error(f"Error updating document {document_id} status: {e}")
+            return False
+    
+    async def check_document_exists(self, tenant_id: str, document_type: str, document_number: str = None, guest_id: int = None, reservation_id: str = None) -> bool:
+        """Check if a document already exists for a guest or reservation"""
+        try:
+            query = self.supabase.table("iddocuments").select("id").eq("tenant_id", tenant_id).eq("type", document_type)
+            
+            if document_number:
+                query = query.eq("document_number", document_number)
+            if guest_id:
+                query = query.eq("guest_id", guest_id)
+            if reservation_id:
+                query = query.eq("reservation_id", reservation_id)
+            
+            response = query.execute()
+            return bool(response.data)
+        except Exception as e:
+            logger.error(f"Error checking document existence: {e}")
+            return False
+    
+    async def get_required_documents_config(self, tenant_id: str) -> List[Dict[str, Any]]:
+        """Get required documents configuration for a tenant"""
+        try:
+            # This could be stored in a tenant configuration table
+            # For now, return default required documents
+            default_documents = [
+                {
+                    "type": "RG",
+                    "description": "Carteira de Identidade (RG)",
+                    "is_required": True,
+                    "examples": ["RG brasileiro", "Carteira de Identidade"]
+                },
+                {
+                    "type": "CPF",
+                    "description": "Cadastro de Pessoa Física (CPF)",
+                    "is_required": True,
+                    "examples": ["CPF", "Cadastro de Pessoa Física"]
+                },
+                {
+                    "type": "CNH",
+                    "description": "Carteira Nacional de Habilitação",
+                    "is_required": False,
+                    "examples": ["CNH", "Carteira de Habilitação"]
+                },
+                {
+                    "type": "Passport",
+                    "description": "Passaporte",
+                    "is_required": False,
+                    "examples": ["Passport", "Passaporte"]
+                }
+            ]
+            return default_documents
+        except Exception as e:
+            logger.error(f"Error getting required documents config: {e}")
+            return []
 
 # Global database service instance
 db_service = DatabaseService()

@@ -116,3 +116,43 @@ class MessageFragment(BaseModel):
     content: str
     is_last: bool = False
     timestamp: datetime
+
+class IDDocument(BaseModel):
+    """Document information based on iddocuments table structure"""
+    id: Optional[int] = None
+    tenant_id: Optional[str] = None
+    reservation_id: Optional[str] = None  # Links to Reservations.reservationid
+    guest_id: Optional[int] = None
+    type: str  # Document type (RG, CPF, CNH, Passport, etc.)
+    document_number: Optional[str] = None
+    person_name: Optional[str] = None
+    birth_date: Optional[str] = None  # Date as string
+    issuing_authority: Optional[str] = None
+    validity_date: Optional[str] = None  # Date as string
+    storage_path: str  # Path in Supabase Storage
+    file_size: Optional[int] = None
+    mime_type: Optional[str] = None
+    status: str = "pending"  # pending, approved, rejected
+    validation_status: str = "pending"  # pending, validated, invalid
+    hash: Optional[str] = None
+    base64_data: Optional[str] = None
+    processing_metadata: Optional[Dict[str, Any]] = {}
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+class DocumentValidation(BaseModel):
+    """Document validation result"""
+    document_id: int
+    is_valid: bool
+    validation_type: str  # legibility, completeness, authenticity
+    confidence_score: Optional[float] = None
+    issues: List[str] = []
+    recommendations: List[str] = []
+
+class RequiredDocument(BaseModel):
+    """Required document for check-in process"""
+    document_type: str
+    is_required: bool = True
+    description: str
+    examples: Optional[List[str]] = None
+    validation_rules: Optional[Dict[str, Any]] = None
